@@ -30,7 +30,7 @@ ignore = ["N803", "N806", "N812", "RUF001", "RUF002", "RUF003"]
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 # nn.Module.__call__ returns Any and Tensor.backward is untyped in torch's stubs; with
 # these two checks on, every forward call and every backward() needs an ignore.
 warn_return_any = false
