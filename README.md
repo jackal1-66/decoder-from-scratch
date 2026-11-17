@@ -30,7 +30,8 @@ people usually make about them.
   2.461) than LoRA r=8 (1.919 / 2.884). LoRA at a 10× lower rate forgot least (2.378) but
   learned least (2.008). Higher LoRA rank forgot monotonically more.
 
-Details, tables and caveats are in [`docs/notes.md`](docs/notes.md).
+The numbers come from `scripts/benchmark_generation.py`, `scripts/finetune_experiment.py`
+and the training logs written by `python -m decoder.train`.
 
 ## Data
 
