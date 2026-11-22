@@ -24,6 +24,7 @@ falls back to the explicit path.
 """
 
 import math
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -240,11 +241,14 @@ class Decoder(nn.Module):
         return logits
 
     def num_parameters(self) -> int:
-        return sum(p.size for p in named_parameters(self).values())
+        return sum(p.size for p in flat_parameters(self.parameters()).values())
 
 
-def named_parameters(module: nn.Module) -> dict[str, mx.array]:
-    """All parameters of ``module`` by dotted name, as in a PyTorch ``state_dict``."""
-    flat = tree_flatten(module.parameters(), destination={})
+def flat_parameters(tree: dict[str, Any]) -> dict[str, mx.array]:
+    """A parameter tree (``module.parameters()``, gradients, ...) by dotted name.
+
+    The names are those of a PyTorch ``state_dict``: ``blocks.0.attn.wq.weight``.
+    """
+    flat = tree_flatten(tree, destination={})
     assert isinstance(flat, dict)  # tree_flatten returns the type of `destination`
     return flat

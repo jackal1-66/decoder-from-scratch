@@ -14,7 +14,7 @@ from decoder_mlx.model import (
     KVCache,
     RMSNorm,
     apply_rope,
-    named_parameters,
+    flat_parameters,
     rope_tables,
 )
 
@@ -164,7 +164,7 @@ def test_can_overfit_a_single_batch(config: Config) -> None:
 
 
 def test_parameters_are_named_as_in_the_pytorch_state_dict(mlx_model: Decoder) -> None:
-    names = set(named_parameters(mlx_model))
+    names = set(flat_parameters(mlx_model.parameters()))
     assert {
         "embed.weight",
         "norm.weight",
