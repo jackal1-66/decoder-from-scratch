@@ -52,3 +52,5 @@ implicit_reexport = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["gpu: needs a CUDA GPU; skipped in CI"]
+# A new deprecation in torch or MLX should fail the tests, not scroll past.
+filterwarnings = ["error"]

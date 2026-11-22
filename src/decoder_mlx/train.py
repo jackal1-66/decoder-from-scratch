@@ -182,35 +182,38 @@ def train(
         logger.info("resuming at step %d from %s", first, state_path)
     else:
         lines = []
-    log = log_path.open("w")
-    log.writelines(lines)
+    with log_path.open("w") as log:
+        log.writelines(lines)
 
-    def loss_fn(model: Decoder, x: mx.array, y: mx.array) -> mx.array:
-        return nn.losses.cross_entropy(model(x), y, reduction="mean")
+        def loss_fn(model: Decoder, x: mx.array, y: mx.array) -> mx.array:
+            return nn.losses.cross_entropy(model(x), y, reduction="mean")
 
-    loss_and_grad = nn.value_and_grad(model, loss_fn)
-    t0 = time.perf_counter()
-    for step in range(first, cfg.steps + 1):
-        evaluated_before_checkpoint = resume and step == first
-        if (step % cfg.eval_every == 0 or step == cfg.steps) and not evaluated_before_checkpoint:
-            record: dict[str, float] = {"step": step, "seconds": time.perf_counter() - t0}
-            record |= {f"{n}_bpb": evaluate(model, d, seq_len) for n, d in evals.items()}
-            log.write(json.dumps(record) + "\n")
-            log.flush()
-            logger.info(json.dumps(record))
-            _save_state(state_path, model, optimizer, step, cfg, batch_rng)
-        if step == cfg.steps:
-            break
-        mx.random.seed((cfg.seed << 32) | step)  # dropout masks depend on (seed, step) only
-        optimizer.learning_rate = lr_at(step, cfg)
-        x, y = batch(train_data, cfg.batch_size, seq_len, batch_rng, "cpu")
-        loss, grads = loss_and_grad(model, _to_mlx(x), _to_mlx(y))
-        grads, _ = optim.clip_grad_norm(grads, cfg.grad_clip)
-        optimizer.update(model, grads)
-        mx.eval(model.parameters(), optimizer.state, loss)
-        if cfg.log_every and step % cfg.log_every == 0:
-            log.write(json.dumps({"step": step, "train_bpb": _scalar(loss) / math.log(2)}) + "\n")
-    log.close()
+        loss_and_grad = nn.value_and_grad(model, loss_fn)
+        t0 = time.perf_counter()
+        for step in range(first, cfg.steps + 1):
+            evaluated_before_checkpoint = resume and step == first
+            if (
+                step % cfg.eval_every == 0 or step == cfg.steps
+            ) and not evaluated_before_checkpoint:
+                record: dict[str, float] = {"step": step, "seconds": time.perf_counter() - t0}
+                record |= {f"{n}_bpb": evaluate(model, d, seq_len) for n, d in evals.items()}
+                log.write(json.dumps(record) + "\n")
+                log.flush()
+                logger.info(json.dumps(record))
+                _save_state(state_path, model, optimizer, step, cfg, batch_rng)
+            if step == cfg.steps:
+                break
+            mx.random.seed((cfg.seed << 32) | step)  # dropout masks depend on (seed, step) only
+            optimizer.learning_rate = lr_at(step, cfg)
+            x, y = batch(train_data, cfg.batch_size, seq_len, batch_rng, "cpu")
+            loss, grads = loss_and_grad(model, _to_mlx(x), _to_mlx(y))
+            grads, _ = optim.clip_grad_norm(grads, cfg.grad_clip)
+            optimizer.update(model, grads)
+            mx.eval(model.parameters(), optimizer.state, loss)
+            if cfg.log_every and step % cfg.log_every == 0:
+                log.write(
+                    json.dumps({"step": step, "train_bpb": _scalar(loss) / math.log(2)}) + "\n"
+                )
     return {name: evaluate(model, data, seq_len) for name, data in evals.items()}
 
 

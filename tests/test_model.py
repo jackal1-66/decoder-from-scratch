@@ -87,7 +87,7 @@ def test_initial_loss_is_close_to_uniform(model: Decoder, config: Config) -> Non
     tokens = torch.randint(0, config.vocab_size, (8, 32))
     logits = model(tokens[:, :-1])
     loss = F.cross_entropy(logits.reshape(-1, config.vocab_size), tokens[:, 1:].reshape(-1))
-    assert float(loss) == pytest.approx(math.log(config.vocab_size), rel=0.05)
+    assert float(loss.detach()) == pytest.approx(math.log(config.vocab_size), rel=0.05)
 
 
 def test_can_overfit_a_single_batch(config: Config) -> None:
@@ -101,7 +101,7 @@ def test_can_overfit_a_single_batch(config: Config) -> None:
         opt.zero_grad()
         loss.backward()
         opt.step()
-    assert float(loss) < 0.1
+    assert float(loss.detach()) < 0.1
 
 
 @pytest.mark.parametrize(

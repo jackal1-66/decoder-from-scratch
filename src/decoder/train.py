@@ -138,37 +138,36 @@ def train(
     scaler = GradScaler(device, enabled=device == "cuda")
     seq_len = model.config.max_seq_len
     out.mkdir(parents=True, exist_ok=True)
-    log = (out / "log.jsonl").open("w")
-    t0 = time.perf_counter()
-    for step in range(cfg.steps + 1):
-        if step % cfg.eval_every == 0 or step == cfg.steps:
-            record: dict[str, float] = {"step": step, "seconds": time.perf_counter() - t0}
-            record.update(
-                {
-                    f"{name}_bpb": evaluate(model, data, seq_len, device)
-                    for name, data in evals.items()
-                }
-            )
-            log.write(json.dumps(record) + "\n")
-            log.flush()
-            logger.info(json.dumps(record))
-        if step == cfg.steps:
-            break
-        for group in optimizer.param_groups:
-            group["lr"] = lr_at(step, cfg)
-        x, y = batch(train_data, cfg.batch_size, seq_len, gen, device)
-        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device == "cuda"):
-            logits = model(x)
-        loss = F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), y.reshape(-1))
-        if cfg.log_every and step % cfg.log_every == 0:
-            log.write(json.dumps({"step": step, "train_bpb": loss.item() / math.log(2)}) + "\n")
-        optimizer.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
-        scaler.step(optimizer)
-        scaler.update()
-    log.close()
+    with (out / "log.jsonl").open("w") as log:
+        t0 = time.perf_counter()
+        for step in range(cfg.steps + 1):
+            if step % cfg.eval_every == 0 or step == cfg.steps:
+                record: dict[str, float] = {"step": step, "seconds": time.perf_counter() - t0}
+                record.update(
+                    {
+                        f"{name}_bpb": evaluate(model, data, seq_len, device)
+                        for name, data in evals.items()
+                    }
+                )
+                log.write(json.dumps(record) + "\n")
+                log.flush()
+                logger.info(json.dumps(record))
+            if step == cfg.steps:
+                break
+            for group in optimizer.param_groups:
+                group["lr"] = lr_at(step, cfg)
+            x, y = batch(train_data, cfg.batch_size, seq_len, gen, device)
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device == "cuda"):
+                logits = model(x)
+            loss = F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), y.reshape(-1))
+            if cfg.log_every and step % cfg.log_every == 0:
+                log.write(json.dumps({"step": step, "train_bpb": loss.item() / math.log(2)}) + "\n")
+            optimizer.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
     final = {name: evaluate(model, data, seq_len, device) for name, data in evals.items()}
     return final
 
