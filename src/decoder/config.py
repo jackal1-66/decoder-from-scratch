@@ -24,6 +24,22 @@ class Config:
         return self.d_model // self.n_heads
 
     def __post_init__(self) -> None:
+        sizes = (
+            "vocab_size",
+            "d_model",
+            "n_layers",
+            "n_heads",
+            "n_kv_heads",
+            "d_ff",
+            "max_seq_len",
+        )
+        for name in sizes:
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError(f"dropout must be in [0, 1), got {self.dropout}")
+        if self.rope_base <= 0 or self.norm_eps <= 0:
+            raise ValueError("rope_base and norm_eps must be positive")
         if self.d_model % self.n_heads:
             raise ValueError("d_model must be divisible by n_heads")
         if self.n_heads % self.n_kv_heads:
