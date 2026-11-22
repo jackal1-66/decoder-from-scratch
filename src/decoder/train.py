@@ -15,8 +15,10 @@ held-out tail is split once more into dev (choose settings) and test (report).
 
 import argparse
 import json
+import logging
 import math
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -27,6 +29,8 @@ from torch.amp.grad_scaler import GradScaler
 
 from decoder.lora import apply_lora
 from decoder.model import Config, Decoder
+
+logger = logging.getLogger(__name__)
 
 GUTENBERG_START = "*** START OF THE PROJECT GUTENBERG EBOOK"
 GUTENBERG_END = "*** END OF THE PROJECT GUTENBERG EBOOK"
@@ -56,18 +60,27 @@ def batch(
     return x.to(device), y.to(device)
 
 
+def eval_batches(
+    data: Tensor, seq_len: int, max_windows: int = 200, batch_size: int = 32
+) -> Iterator[tuple[Tensor, Tensor]]:
+    """Inputs and targets of the first non-overlapping windows of held-out data, on CPU."""
+    n = min(max_windows, (len(data) - 1) // seq_len)
+    for i in range(0, n, batch_size):
+        starts = range(i * seq_len, min(i + batch_size, n) * seq_len, seq_len)
+        x = torch.stack([data[s : s + seq_len] for s in starts])
+        y = torch.stack([data[s + 1 : s + seq_len + 1] for s in starts])
+        yield x, y
+
+
 @torch.no_grad()
 def evaluate(
     model: Decoder, data: Tensor, seq_len: int, device: str, max_windows: int = 200
 ) -> float:
     """Bits per byte over non-overlapping windows of held-out data (deterministic)."""
     model.eval()
-    n = min(max_windows, (len(data) - 1) // seq_len)
     total, count = 0.0, 0
-    for i in range(0, n, 32):
-        starts = range(i * seq_len, min(i + 32, n) * seq_len, seq_len)
-        x = torch.stack([data[s : s + seq_len] for s in starts]).to(device)
-        y = torch.stack([data[s + 1 : s + seq_len + 1] for s in starts]).to(device)
+    for x, y in eval_batches(data, seq_len, max_windows):
+        x, y = x.to(device), y.to(device)
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device == "cuda"):
             logits = model(x)
         total += F.cross_entropy(
@@ -88,6 +101,7 @@ class TrainConfig:
     weight_decay: float = 0.1
     grad_clip: float = 1.0
     eval_every: int = 250
+    log_every: int = 50  # training loss of every n-th batch; 0 = never
     seed: int = 0
 
 
@@ -137,7 +151,7 @@ def train(
             )
             log.write(json.dumps(record) + "\n")
             log.flush()
-            print(json.dumps(record), flush=True)
+            logger.info(json.dumps(record))
         if step == cfg.steps:
             break
         for group in optimizer.param_groups:
@@ -146,6 +160,8 @@ def train(
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device == "cuda"):
             logits = model(x)
         loss = F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), y.reshape(-1))
+        if cfg.log_every and step % cfg.log_every == 0:
+            log.write(json.dumps({"step": step, "train_bpb": loss.item() / math.log(2)}) + "\n")
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -173,6 +189,7 @@ def main() -> None:
     p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     data = load_bytes(args.text, args.gutenberg)
     if args.mode == "pretrain":

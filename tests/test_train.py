@@ -1,10 +1,11 @@
+import json
 from pathlib import Path
 
 import torch
 
 from decoder.lora import apply_lora
 from decoder.model import Config, Decoder
-from decoder.train import TrainConfig, load_bytes, lr_at, split, train
+from decoder.train import TrainConfig, eval_batches, load_bytes, lr_at, split, train
 
 
 def test_gutenberg_header_and_footer_are_stripped(tmp_path: Path) -> None:
@@ -38,7 +39,9 @@ def test_training_learns_a_repetitive_text_on_cpu(tmp_path: Path) -> None:
     cfg = TrainConfig(steps=150, batch_size=8, learning_rate=3e-3, warmup_steps=10, eval_every=50)
     final = train(model, train_data, {"val": val}, cfg, tmp_path, device="cpu")
     assert final["val"] < 0.5  # 8 equiprobable bytes would be 3 bits; the pattern is ~0
-    assert (tmp_path / "log.jsonl").exists()
+    records = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
+    assert [r["step"] for r in records if "val_bpb" in r] == [0, 50, 100, 150]
+    assert [r["step"] for r in records if "train_bpb" in r] == [0, 50, 100]
 
 
 def test_lora_finetune_leaves_base_weights_untouched(tmp_path: Path) -> None:
@@ -54,3 +57,13 @@ def test_lora_finetune_leaves_base_weights_untouched(tmp_path: Path) -> None:
     for name, value in base.items():
         lora_name = name.replace(".wq.", ".wq.base.").replace(".wv.", ".wv.base.")
         torch.testing.assert_close(state[lora_name], value)
+
+
+def test_eval_batches_are_consecutive_non_overlapping_windows() -> None:
+    data = torch.arange(100)
+    batches = list(eval_batches(data, seq_len=10, max_windows=5, batch_size=2))
+    assert [x.shape[0] for x, _ in batches] == [2, 2, 1]
+    x = torch.cat([x for x, _ in batches])
+    y = torch.cat([y for _, y in batches])
+    assert x[:, 0].tolist() == [0, 10, 20, 30, 40]
+    assert torch.equal(y, x + 1)
