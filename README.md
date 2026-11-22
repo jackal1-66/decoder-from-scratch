@@ -1,6 +1,5 @@
 # decoder-from-scratch
-**Disclaimer**: this exercise has a pure educational target and has been developed using both Anthropic LLMs 
-and local LLMs (such as Kimi K3).
+Developed with the assistance of AI coding tools.
 
 A decoder-only transformer written from scratch in PyTorch, covering the mechanisms that
 matter in practice: causal attention with rotary embeddings and grouped-query heads,
