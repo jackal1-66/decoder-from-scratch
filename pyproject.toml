@@ -15,7 +15,10 @@ dependencies = ["torch>=2.4"]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "numpy>=2.0"]
 # On Linux the `mlx` wheel holds only the Python bindings; the `cpu` extra adds the
 # compiled backend (it is a no-op on macOS, where the Metal backend is always installed).
-mlx = ["mlx[cpu]>=0.32.4"]
+mlx = ["mlx[cpu]>=0.32.4", "numpy>=2.0"]
+
+[project.scripts]
+decoder-convert = "decoder_mlx.convert:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
