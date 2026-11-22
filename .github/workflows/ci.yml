@@ -6,6 +6,7 @@ on:
 
 jobs:
   check:
+    name: lint, types and tests (PyTorch + MLX CPU)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,13 +14,33 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install (CPU torch)
-        run: pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
+      # torch first, from the CPU index only: with --extra-index-url, pip may pick a newer
+      # CUDA build from PyPI instead.
+      - name: Install
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,mlx]"
       - name: Lint
         run: |
           ruff check .
           ruff format --check .
       - name: Type check
         run: mypy
+      - name: Tests (CPU)
+        run: pytest -m "not gpu"
+
+  torch-only:
+    name: tests without MLX installed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
       - name: Tests (CPU)
         run: pytest -m "not gpu"
