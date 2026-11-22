@@ -44,3 +44,22 @@ jobs:
           pip install -e ".[dev]"
       - name: Tests (CPU)
         run: pytest -m "not gpu"
+
+  minimum-versions:
+    name: tests with the minimum supported versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # The floors declared in pyproject.toml. MLX on CPU compiles kernels with the
+      # system C++ compiler at run time; the runner image provides g++.
+      - name: Install
+        run: |
+          pip install "torch==2.4.1" --index-url https://download.pytorch.org/whl/cpu
+          pip install "numpy==2.0.2" "mlx[cpu]==0.32.4" pytest
+          pip install -e . --no-deps
+      - name: Tests (CPU)
+        run: pytest -m "not gpu"
