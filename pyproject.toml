@@ -19,6 +19,7 @@ mlx = ["mlx[cpu]>=0.32.4", "numpy>=2.0"]
 
 [project.scripts]
 decoder-convert = "decoder_mlx.convert:main"
+decoder-benchmark = "decoder_mlx.benchmark:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
