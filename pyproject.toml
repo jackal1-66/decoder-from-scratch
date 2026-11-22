@@ -39,6 +39,12 @@ files = ["src", "tests", "scripts"]
 warn_return_any = false
 disallow_untyped_calls = false
 
+# mlx.nn re-exports its layers through `import *` from modules without __all__, which
+# strict mode's no_implicit_reexport turns into "Module has no attribute Linear".
+[[tool.mypy.overrides]]
+module = ["mlx.nn", "mlx.nn.layers"]
+implicit_reexport = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["gpu: needs a CUDA GPU; skipped in CI"]
