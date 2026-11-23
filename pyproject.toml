@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "decoder-from-scratch"
-version = "0.1.0"
-description = "A decoder-only transformer written from scratch in PyTorch: attention, RoPE, KV cache, sampling, LoRA."
+version = "0.2.0"
+description = "A decoder-only transformer written from scratch in PyTorch, with an equivalent MLX implementation: attention, RoPE, KV cache, sampling, LoRA."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
