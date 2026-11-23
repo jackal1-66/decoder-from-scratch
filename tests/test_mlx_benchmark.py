@@ -25,4 +25,6 @@ def test_benchmark_writes_json_and_markdown(tmp_path: Path, config: Config) -> N
         assert len(r["seconds"]) == 3
         assert r["min_s"] <= r["median_s"] <= r["max_s"]
     assert {"torch", "mlx", "mlx_backend", "cpu"} <= report["environment"].keys()
-    assert (tmp_path / "b.md").read_text().count("\n| ") == 8  # header + 7 rows
+    table = (tmp_path / "b.md").read_text()
+    assert "on cpu; MLX" in table  # no device name on CPU, no stray space
+    assert table.count("\n| ") == 8  # header + 7 rows

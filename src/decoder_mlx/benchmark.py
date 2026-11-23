@@ -181,10 +181,10 @@ def run_benchmarks(
 
 def markdown(report: dict[str, Any]) -> str:
     env, settings = report["environment"], report["settings"]
+    torch_on = " ".join(filter(None, [env["torch_device"], env["torch_device_name"]]))
     lines = [
-        f"Machine: {env['cpu']} ({env['machine']}); PyTorch {env['torch']} on "
-        f"{env['torch_device']} {env['torch_device_name']}; MLX {env['mlx']} on "
-        f"{env['mlx_backend']}.".replace("  ", " "),
+        f"Machine: {env['cpu']} ({env['machine']}); PyTorch {env['torch']} on {torch_on}; "
+        f"MLX {env['mlx']} on {env['mlx_backend']}.",
         f"Model: {report['parameters'] / 1e6:.2f}M parameters, float32; batch "
         f"{settings['batch']}, forward length {report['config']['max_seq_len']}, "
         f"{settings['new_tokens']} new tokens; median of {settings['repeats']} runs after "
