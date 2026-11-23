@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import mlx.core as mx
+import mlx.nn as nn
+import numpy as np
 import pytest
 import torch
 
@@ -19,7 +21,7 @@ from decoder_mlx.checkpoint import CheckpointError, save_model
 from decoder_mlx.convert import torch_to_mlx
 from decoder_mlx.lora import apply_lora
 from decoder_mlx.model import Decoder, flat_parameters
-from decoder_mlx.train import evaluate, train
+from decoder_mlx.train import accumulate_gradients, evaluate, train
 
 # Relative, as for the logits in test_mlx_equivalence.py; measured: <= 5.3e-7 over 50 steps.
 TOLERANCE = 1e-5
@@ -62,6 +64,43 @@ def test_loss_curve_matches_pytorch_from_the_same_weights_and_batches(tmp_path: 
     for step, expected in torch_curve.items():
         assert mlx_curve[step] == pytest.approx(expected, rel=TOLERANCE), step
     assert mlx_final["val"] == pytest.approx(torch_final["val"], rel=TOLERANCE)
+
+
+def test_accumulated_gradients_equal_the_full_batch_gradients() -> None:
+    mx.random.seed(0)
+    model = Decoder(SMALL)
+
+    def loss_fn(model: Decoder, x: mx.array, y: mx.array) -> mx.array:
+        return nn.losses.cross_entropy(model(x), y, reduction="mean")
+
+    loss_and_grad = nn.value_and_grad(model, loss_fn)
+    tokens = mx.random.randint(0, SMALL.vocab_size, (8, SMALL.max_seq_len + 1))
+    x, y = tokens[:, :-1], tokens[:, 1:]
+    loss, grads = loss_and_grad(model, x, y)
+    accumulated_loss, accumulated = accumulate_gradients(loss_and_grad, model, x, y, 4)
+    assert float(np.array(accumulated_loss)) == pytest.approx(float(np.array(loss)), rel=TOLERANCE)
+    expected, found = flat_parameters(grads), flat_parameters(accumulated)
+    assert found.keys() == expected.keys()
+    for name, g in expected.items():
+        difference = float(np.abs(np.array(found[name]) - np.array(g)).max())
+        assert difference <= TOLERANCE * float(np.abs(np.array(g)).max()), name
+
+
+def test_gradient_accumulation_gives_the_full_batch_update(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    torch_model = TorchDecoder(SMALL)
+    train_data, val = split(text_bytes(), 0.1)
+    curves, finals = [], []
+    for grad_accum in (1, 4):
+        cfg = TrainConfig(steps=20, batch_size=8, warmup_steps=5, eval_every=10, log_every=1,
+                          grad_accum=grad_accum)  # fmt: skip
+        out = tmp_path / str(grad_accum)
+        finals.append(train(converted(torch_model), train_data, {"val": val}, cfg, out)["val"])
+        curves.append(records(out, "train_bpb"))
+    assert curves[0].keys() == curves[1].keys() == set(range(20))
+    for step, expected in curves[0].items():
+        assert curves[1][step] == pytest.approx(expected, rel=TOLERANCE), step
+    assert finals[1] == pytest.approx(finals[0], rel=TOLERANCE)
 
 
 def test_evaluation_matches_pytorch(model: TorchDecoder) -> None:

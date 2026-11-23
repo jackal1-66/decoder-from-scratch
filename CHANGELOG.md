@@ -25,6 +25,8 @@ All notable changes to this project are documented here. The format follows
   the equivalence results in the README.
 - `decoder.config` (framework-free `Config`, re-exported by `decoder.model`),
   `decoder.train.eval_batches`, and `TrainConfig.log_every`, which logs the training loss.
+- Gradient accumulation in both trainers: `TrainConfig.grad_accum` and `--grad-accum N`
+  split each batch into N micro-batches; the update is that of the full batch.
 - CI jobs for the MLX tests, for the PyTorch package without MLX, and for the minimum
   supported versions (torch 2.4.1, numpy 2.0.2, mlx 0.32.4).
 

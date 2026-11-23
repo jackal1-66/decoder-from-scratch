@@ -27,6 +27,7 @@ import json
 import logging
 import math
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 import torch
-from mlx.utils import tree_unflatten
+from mlx.utils import tree_map, tree_unflatten
 from torch import Tensor
 
 from decoder.config import Config
@@ -93,6 +94,27 @@ def make_optimizer(cfg: TrainConfig) -> optim.MultiOptimizer:
         return weight.ndim >= 2
 
     return optim.MultiOptimizer([adamw(cfg.weight_decay), adamw(0.0)], [is_matrix])
+
+
+def accumulate_gradients(
+    loss_and_grad: Callable[[Decoder, mx.array, mx.array], tuple[mx.array, Any]],
+    model: Decoder,
+    x: mx.array,
+    y: mx.array,
+    n: int,
+) -> tuple[mx.array, Any]:
+    """Mean loss and gradients over ``n`` equal micro-batches of (x, y).
+
+    Each micro-batch is evaluated before the next one is built: otherwise the ``n`` forward
+    and backward passes form one lazy graph whose activations can all be alive at once.
+    """
+    loss, grads = mx.array(0.0), None
+    for x_micro, y_micro in zip(mx.split(x, n), mx.split(y, n), strict=True):
+        micro_loss, micro_grads = loss_and_grad(model, x_micro, y_micro)
+        loss = loss + micro_loss
+        grads = micro_grads if grads is None else tree_map(mx.add, grads, micro_grads)
+        mx.eval(loss, grads)
+    return loss / n, tree_map(lambda g: g / n, grads)
 
 
 def _save_state(
@@ -206,7 +228,9 @@ def train(
             mx.random.seed((cfg.seed << 32) | step)  # dropout masks depend on (seed, step) only
             optimizer.learning_rate = lr_at(step, cfg)
             x, y = batch(train_data, cfg.batch_size, seq_len, batch_rng, "cpu")
-            loss, grads = loss_and_grad(model, _to_mlx(x), _to_mlx(y))
+            loss, grads = accumulate_gradients(
+                loss_and_grad, model, _to_mlx(x), _to_mlx(y), cfg.grad_accum
+            )
             grads, _ = optim.clip_grad_norm(grads, cfg.grad_clip)
             optimizer.update(model, grads)
             mx.eval(model.parameters(), optimizer.state, loss)
@@ -232,6 +256,12 @@ def main() -> None:
     p.add_argument("--learning-rate", type=float, default=1e-3)
     p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--grad-accum",
+        type=int,
+        default=1,
+        help=f"micro-batches per batch (must divide {TrainConfig.batch_size})",
+    )
     p.add_argument("--resume", action="store_true", help=f"continue from out/{STATE_FILE}")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -259,7 +289,15 @@ def main() -> None:
             apply_lora(model, targets=("wq", "wk", "wv", "wo", "w1", "w2", "w3"),
                        rank=args.lora_rank, alpha=2 * args.lora_rank)  # fmt: skip
 
-    cfg = TrainConfig(steps=args.steps, learning_rate=args.learning_rate, seed=args.seed)
+    try:
+        cfg = TrainConfig(
+            steps=args.steps,
+            learning_rate=args.learning_rate,
+            seed=args.seed,
+            grad_accum=args.grad_accum,
+        )
+    except ValueError as err:
+        p.error(str(err))
     trainable = sum(a.size for a in flat_parameters(model.trainable_parameters()).values())
     final = train(model, train_data, evals, cfg, args.out, resume=args.resume)
     summary: dict[str, Any] = {

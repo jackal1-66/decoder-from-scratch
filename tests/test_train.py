@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import torch
 
 from decoder.lora import apply_lora
@@ -42,6 +43,33 @@ def test_training_learns_a_repetitive_text_on_cpu(tmp_path: Path) -> None:
     records = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
     assert [r["step"] for r in records if "val_bpb" in r] == [0, 50, 100, 150]
     assert [r["step"] for r in records if "train_bpb" in r] == [0, 50, 100]
+
+
+@pytest.mark.parametrize("grad_accum", [0, 3])
+def test_grad_accum_must_divide_the_batch(grad_accum: int) -> None:
+    with pytest.raises(ValueError, match="grad_accum"):
+        TrainConfig(batch_size=8, grad_accum=grad_accum)
+
+
+def test_gradient_accumulation_gives_the_full_batch_update(tmp_path: Path) -> None:
+    generator = torch.Generator().manual_seed(0)
+    train_data, val = split(torch.randint(0, 256, (4_000,), generator=generator), 0.1)
+    config = Config(d_model=32, n_layers=1, n_heads=2, n_kv_heads=1, d_ff=64, max_seq_len=32)
+    torch.manual_seed(0)
+    initial = Decoder(config).state_dict()
+    curves, finals = [], []
+    for grad_accum in (1, 4):
+        model = Decoder(config)
+        model.load_state_dict(initial)
+        cfg = TrainConfig(steps=20, batch_size=8, warmup_steps=5, eval_every=10, log_every=1,
+                          grad_accum=grad_accum)  # fmt: skip
+        out = tmp_path / str(grad_accum)
+        finals.append(train(model, train_data, {"val": val}, cfg, out, device="cpu")["val"])
+        lines = (out / "log.jsonl").read_text().splitlines()
+        curves.append([r["train_bpb"] for r in map(json.loads, lines) if "train_bpb" in r])
+    assert len(curves[0]) == 20
+    assert curves[1] == pytest.approx(curves[0], rel=1e-5)
+    assert finals[1] == pytest.approx(finals[0], rel=1e-5)
 
 
 def test_lora_finetune_leaves_base_weights_untouched(tmp_path: Path) -> None:

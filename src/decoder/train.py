@@ -103,6 +103,16 @@ class TrainConfig:
     eval_every: int = 250
     log_every: int = 50  # training loss of every n-th batch; 0 = never
     seed: int = 0
+    # Gradient accumulation: each batch of batch_size windows is processed as grad_accum
+    # equal micro-batches whose gradients are averaged. Same update, less activation memory.
+    grad_accum: int = 1
+
+    def __post_init__(self) -> None:
+        if self.grad_accum < 1 or self.batch_size % self.grad_accum:
+            raise ValueError(
+                f"grad_accum ({self.grad_accum}) must be at least 1 and divide "
+                f"batch_size ({self.batch_size})"
+            )
 
 
 def lr_at(step: int, cfg: TrainConfig) -> float:
@@ -135,7 +145,8 @@ def train(
         {"params": no_decay, "weight_decay": 0.0},
     ]
     optimizer = torch.optim.AdamW(groups, lr=cfg.learning_rate, betas=(0.9, 0.95))
-    scaler = GradScaler(device, enabled=device == "cuda")
+    use_amp = device == "cuda"
+    scaler = GradScaler(device, enabled=use_amp)
     seq_len = model.config.max_seq_len
     out.mkdir(parents=True, exist_ok=True)
     with (out / "log.jsonl").open("w") as log:
@@ -157,13 +168,18 @@ def train(
             for group in optimizer.param_groups:
                 group["lr"] = lr_at(step, cfg)
             x, y = batch(train_data, cfg.batch_size, seq_len, gen, device)
-            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device == "cuda"):
-                logits = model(x)
-            loss = F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), y.reshape(-1))
+            optimizer.zero_grad(set_to_none=True)
+            micro = cfg.batch_size // cfg.grad_accum
+            loss = torch.zeros((), device=device)
+            for x_micro, y_micro in zip(x.split(micro), y.split(micro), strict=True):
+                with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
+                    logits = model(x_micro)
+                flat = logits.float().reshape(-1, logits.shape[-1])
+                micro_loss = F.cross_entropy(flat, y_micro.reshape(-1)) / cfg.grad_accum
+                scaler.scale(micro_loss).backward()
+                loss += micro_loss.detach()
             if cfg.log_every and step % cfg.log_every == 0:
                 log.write(json.dumps({"step": step, "train_bpb": loss.item() / math.log(2)}) + "\n")
-            optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
             scaler.step(optimizer)
@@ -187,6 +203,12 @@ def main() -> None:
     p.add_argument("--learning-rate", type=float, default=1e-3)
     p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--grad-accum",
+        type=int,
+        default=1,
+        help=f"micro-batches per batch (must divide {TrainConfig.batch_size})",
+    )
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -210,7 +232,15 @@ def main() -> None:
             apply_lora(model, targets=("wq", "wk", "wv", "wo", "w1", "w2", "w3"),
                        rank=args.lora_rank, alpha=2 * args.lora_rank)  # fmt: skip
 
-    cfg = TrainConfig(steps=args.steps, learning_rate=args.learning_rate, seed=args.seed)
+    try:
+        cfg = TrainConfig(
+            steps=args.steps,
+            learning_rate=args.learning_rate,
+            seed=args.seed,
+            grad_accum=args.grad_accum,
+        )
+    except ValueError as err:
+        p.error(str(err))
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     final = train(model, train_data, evals, cfg, args.out)
     summary = {

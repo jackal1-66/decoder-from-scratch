@@ -114,7 +114,10 @@ for _, module in model.named_modules():
 
 Train in MLX with the recipe of `decoder.train` (same batches, schedule and optimiser).
 The full training state is saved at every evaluation, and `--resume` continues exactly
-where an interrupted run stopped:
+where an interrupted run stopped. `--grad-accum N` (in both trainers) processes each batch
+of 64 windows as N micro-batches and averages their gradients: the same update, with the
+activations of one micro-batch alive at a time. The tests check that the gradients and the
+loss curve match those of the whole batch to within 1e-5.
 
 ```bash
 python -m decoder_mlx.train pretrain --text data/shakespeare.txt --out runs/mlx-pretrain
