@@ -1,4 +1,5 @@
 import math
+from typing import Any
 
 import pytest
 import torch
@@ -86,7 +87,7 @@ def test_initial_loss_is_close_to_uniform(model: Decoder, config: Config) -> Non
     tokens = torch.randint(0, config.vocab_size, (8, 32))
     logits = model(tokens[:, :-1])
     loss = F.cross_entropy(logits.reshape(-1, config.vocab_size), tokens[:, 1:].reshape(-1))
-    assert float(loss) == pytest.approx(math.log(config.vocab_size), rel=0.05)
+    assert float(loss.detach()) == pytest.approx(math.log(config.vocab_size), rel=0.05)
 
 
 def test_can_overfit_a_single_batch(config: Config) -> None:
@@ -100,11 +101,20 @@ def test_can_overfit_a_single_batch(config: Config) -> None:
         opt.zero_grad()
         loss.backward()
         opt.step()
-    assert float(loss) < 0.1
+    assert float(loss.detach()) < 0.1
 
 
-def test_config_validation() -> None:
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"d_model": 30, "n_heads": 4},
+        {"n_heads": 6, "n_kv_heads": 4},
+        {"n_heads": 0},
+        {"n_layers": -1},
+        {"dropout": 1.0},
+        {"norm_eps": 0.0},
+    ],
+)
+def test_config_validation(fields: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
-        Config(d_model=30, n_heads=4)
-    with pytest.raises(ValueError):
-        Config(n_heads=6, n_kv_heads=4)
+        Config(**fields)

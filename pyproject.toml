@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "decoder-from-scratch"
-version = "0.1.0"
-description = "A decoder-only transformer written from scratch in PyTorch: attention, RoPE, KV cache, sampling, LoRA."
+version = "0.2.0"
+description = "A decoder-only transformer written from scratch in PyTorch, with an equivalent MLX implementation: attention, RoPE, KV cache, sampling, LoRA."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -13,6 +13,13 @@ dependencies = ["torch>=2.4"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11", "numpy>=2.0"]
+# On Linux the `mlx` wheel holds only the Python bindings; the `cpu` extra adds the
+# compiled backend (it is a no-op on macOS, where the Metal backend is always installed).
+mlx = ["mlx[cpu]>=0.32.4", "numpy>=2.0"]
+
+[project.scripts]
+decoder-convert = "decoder_mlx.convert:main"
+decoder-benchmark = "decoder_mlx.benchmark:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -36,6 +43,14 @@ files = ["src", "tests", "scripts"]
 warn_return_any = false
 disallow_untyped_calls = false
 
+# mlx.nn re-exports its layers through `import *` from modules without __all__, which
+# strict mode's no_implicit_reexport turns into "Module has no attribute Linear".
+[[tool.mypy.overrides]]
+module = ["mlx.nn", "mlx.nn.layers"]
+implicit_reexport = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["gpu: needs a CUDA GPU; skipped in CI"]
+# A new deprecation in torch or MLX should fail the tests, not scroll past.
+filterwarnings = ["error"]

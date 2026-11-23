@@ -3,6 +3,23 @@ import torch
 
 from decoder.model import Config, Decoder
 
+try:
+    import mlx.core as mx
+
+    from decoder_mlx.model import Decoder as MLXDecoder
+except ImportError:
+    # Without MLX (the CI job that checks the PyTorch package alone) skip collecting
+    # the MLX tests instead of failing on their imports.
+    collect_ignore_glob = ["test_mlx_*.py"]
+else:
+
+    @pytest.fixture
+    def mlx_model(config: Config) -> MLXDecoder:
+        mx.random.seed(0)
+        model = MLXDecoder(config)
+        model.eval()
+        return model
+
 
 @pytest.fixture
 def config() -> Config:

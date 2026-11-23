@@ -15,8 +15,10 @@ held-out tail is split once more into dev (choose settings) and test (report).
 
 import argparse
 import json
+import logging
 import math
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -27,6 +29,8 @@ from torch.amp.grad_scaler import GradScaler
 
 from decoder.lora import apply_lora
 from decoder.model import Config, Decoder
+
+logger = logging.getLogger(__name__)
 
 GUTENBERG_START = "*** START OF THE PROJECT GUTENBERG EBOOK"
 GUTENBERG_END = "*** END OF THE PROJECT GUTENBERG EBOOK"
@@ -56,18 +60,27 @@ def batch(
     return x.to(device), y.to(device)
 
 
+def eval_batches(
+    data: Tensor, seq_len: int, max_windows: int = 200, batch_size: int = 32
+) -> Iterator[tuple[Tensor, Tensor]]:
+    """Inputs and targets of the first non-overlapping windows of held-out data, on CPU."""
+    n = min(max_windows, (len(data) - 1) // seq_len)
+    for i in range(0, n, batch_size):
+        starts = range(i * seq_len, min(i + batch_size, n) * seq_len, seq_len)
+        x = torch.stack([data[s : s + seq_len] for s in starts])
+        y = torch.stack([data[s + 1 : s + seq_len + 1] for s in starts])
+        yield x, y
+
+
 @torch.no_grad()
 def evaluate(
     model: Decoder, data: Tensor, seq_len: int, device: str, max_windows: int = 200
 ) -> float:
     """Bits per byte over non-overlapping windows of held-out data (deterministic)."""
     model.eval()
-    n = min(max_windows, (len(data) - 1) // seq_len)
     total, count = 0.0, 0
-    for i in range(0, n, 32):
-        starts = range(i * seq_len, min(i + 32, n) * seq_len, seq_len)
-        x = torch.stack([data[s : s + seq_len] for s in starts]).to(device)
-        y = torch.stack([data[s + 1 : s + seq_len + 1] for s in starts]).to(device)
+    for x, y in eval_batches(data, seq_len, max_windows):
+        x, y = x.to(device), y.to(device)
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device == "cuda"):
             logits = model(x)
         total += F.cross_entropy(
@@ -88,7 +101,18 @@ class TrainConfig:
     weight_decay: float = 0.1
     grad_clip: float = 1.0
     eval_every: int = 250
+    log_every: int = 50  # training loss of every n-th batch; 0 = never
     seed: int = 0
+    # Gradient accumulation: each batch of batch_size windows is processed as grad_accum
+    # equal micro-batches whose gradients are averaged. Same update, less activation memory.
+    grad_accum: int = 1
+
+    def __post_init__(self) -> None:
+        if self.grad_accum < 1 or self.batch_size % self.grad_accum:
+            raise ValueError(
+                f"grad_accum ({self.grad_accum}) must be at least 1 and divide "
+                f"batch_size ({self.batch_size})"
+            )
 
 
 def lr_at(step: int, cfg: TrainConfig) -> float:
@@ -121,38 +145,45 @@ def train(
         {"params": no_decay, "weight_decay": 0.0},
     ]
     optimizer = torch.optim.AdamW(groups, lr=cfg.learning_rate, betas=(0.9, 0.95))
-    scaler = GradScaler(device, enabled=device == "cuda")
+    use_amp = device == "cuda"
+    scaler = GradScaler(device, enabled=use_amp)
     seq_len = model.config.max_seq_len
     out.mkdir(parents=True, exist_ok=True)
-    log = (out / "log.jsonl").open("w")
-    t0 = time.perf_counter()
-    for step in range(cfg.steps + 1):
-        if step % cfg.eval_every == 0 or step == cfg.steps:
-            record: dict[str, float] = {"step": step, "seconds": time.perf_counter() - t0}
-            record.update(
-                {
-                    f"{name}_bpb": evaluate(model, data, seq_len, device)
-                    for name, data in evals.items()
-                }
-            )
-            log.write(json.dumps(record) + "\n")
-            log.flush()
-            print(json.dumps(record), flush=True)
-        if step == cfg.steps:
-            break
-        for group in optimizer.param_groups:
-            group["lr"] = lr_at(step, cfg)
-        x, y = batch(train_data, cfg.batch_size, seq_len, gen, device)
-        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device == "cuda"):
-            logits = model(x)
-        loss = F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), y.reshape(-1))
-        optimizer.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
-        scaler.step(optimizer)
-        scaler.update()
-    log.close()
+    with (out / "log.jsonl").open("w") as log:
+        t0 = time.perf_counter()
+        for step in range(cfg.steps + 1):
+            if step % cfg.eval_every == 0 or step == cfg.steps:
+                record: dict[str, float] = {"step": step, "seconds": time.perf_counter() - t0}
+                record.update(
+                    {
+                        f"{name}_bpb": evaluate(model, data, seq_len, device)
+                        for name, data in evals.items()
+                    }
+                )
+                log.write(json.dumps(record) + "\n")
+                log.flush()
+                logger.info(json.dumps(record))
+            if step == cfg.steps:
+                break
+            for group in optimizer.param_groups:
+                group["lr"] = lr_at(step, cfg)
+            x, y = batch(train_data, cfg.batch_size, seq_len, gen, device)
+            optimizer.zero_grad(set_to_none=True)
+            micro = cfg.batch_size // cfg.grad_accum
+            loss = torch.zeros((), device=device)
+            for x_micro, y_micro in zip(x.split(micro), y.split(micro), strict=True):
+                with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
+                    logits = model(x_micro)
+                flat = logits.float().reshape(-1, logits.shape[-1])
+                micro_loss = F.cross_entropy(flat, y_micro.reshape(-1)) / cfg.grad_accum
+                scaler.scale(micro_loss).backward()
+                loss += micro_loss.detach()
+            if cfg.log_every and step % cfg.log_every == 0:
+                log.write(json.dumps({"step": step, "train_bpb": loss.item() / math.log(2)}) + "\n")
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
     final = {name: evaluate(model, data, seq_len, device) for name, data in evals.items()}
     return final
 
@@ -172,8 +203,16 @@ def main() -> None:
     p.add_argument("--learning-rate", type=float, default=1e-3)
     p.add_argument("--dropout", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--grad-accum",
+        type=int,
+        default=1,
+        help=f"micro-batches per batch (must divide {TrainConfig.batch_size})",
+    )
     args = p.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    torch.manual_seed(args.seed)  # model and LoRA initialisation; train() reseeds the batches
     data = load_bytes(args.text, args.gutenberg)
     if args.mode == "pretrain":
         config = Config(dropout=args.dropout)
@@ -194,7 +233,15 @@ def main() -> None:
             apply_lora(model, targets=("wq", "wk", "wv", "wo", "w1", "w2", "w3"),
                        rank=args.lora_rank, alpha=2 * args.lora_rank)  # fmt: skip
 
-    cfg = TrainConfig(steps=args.steps, learning_rate=args.learning_rate, seed=args.seed)
+    try:
+        cfg = TrainConfig(
+            steps=args.steps,
+            learning_rate=args.learning_rate,
+            seed=args.seed,
+            grad_accum=args.grad_accum,
+        )
+    except ValueError as err:
+        p.error(str(err))
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     final = train(model, train_data, evals, cfg, args.out)
     summary = {
