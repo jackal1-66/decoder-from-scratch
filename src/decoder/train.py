@@ -212,6 +212,7 @@ def main() -> None:
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    torch.manual_seed(args.seed)  # model and LoRA initialisation; train() reseeds the batches
     data = load_bytes(args.text, args.gutenberg)
     if args.mode == "pretrain":
         config = Config(dropout=args.dropout)

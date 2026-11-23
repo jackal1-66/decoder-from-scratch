@@ -1,9 +1,11 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
 import torch
 
+import decoder.train as train_module
 from decoder.lora import apply_lora
 from decoder.model import Config, Decoder
 from decoder.train import TrainConfig, eval_batches, load_bytes, lr_at, split, train
@@ -95,3 +97,28 @@ def test_eval_batches_are_consecutive_non_overlapping_windows() -> None:
     y = torch.cat([y for _, y in batches])
     assert x[:, 0].tolist() == [0, 10, 20, 30, 40]
     assert torch.equal(y, x + 1)
+
+
+def test_main_seeds_the_initial_weights(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    text = tmp_path / "text.txt"
+    text.write_bytes(b"to be or not to be " * 100)
+    initial: list[dict[str, torch.Tensor]] = []
+
+    def record_initial_weights(model: Decoder, *args: object, **kwargs: object) -> dict[str, float]:
+        initial.append({k: v.clone() for k, v in model.state_dict().items()})
+        out = args[3]
+        assert isinstance(out, Path)
+        out.mkdir(parents=True)
+        return {}
+
+    monkeypatch.setattr(train_module, "train", record_initial_weights)
+    for run, seed in enumerate([0, 0, 1]):
+        torch.manual_seed(100 + run)  # whatever ran before main() must not matter
+        argv = ["decoder.train", "pretrain", "--text", str(text), "--seed", str(seed),
+                "--out", str(tmp_path / f"run{run}")]  # fmt: skip
+        monkeypatch.setattr(sys, "argv", argv)
+        train_module.main()
+    same_seed, other_seed = initial[1], initial[2]
+    for name, value in initial[0].items():
+        torch.testing.assert_close(same_seed[name], value, rtol=0, atol=0)
+    assert not torch.equal(other_seed["embed.weight"], initial[0]["embed.weight"])

@@ -41,6 +41,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `python -m decoder.train` seeds the model and LoRA initialisation with `--seed`; before,
+  only the batches were seeded, so two runs with the same seed started from different weights.
 - `decoder.train` closes `log.jsonl` when training raises or is interrupted.
 
 ## [0.1.0]

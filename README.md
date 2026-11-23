@@ -136,8 +136,8 @@ decoder-benchmark --out benchmark.json --markdown benchmark.md
 
 - **Pretraining**, 9.5M parameters on Tiny Shakespeare: 1.972 bits/byte on held-out text
   after 1,000 steps (82 s). A 3,000-step run overfits after step 1,000, reaching 2.514.
-  Rerun with torch 2.14.1: 1.982 (81 s); fp16 kernels on the GPU are not bitwise
-  deterministic across versions, and the run seeds the batches but not the initial weights.
+  Rerun with torch 2.14.1: 1.982 (81 s). Both runs predate 0.2.0, which seeds the initial
+  weights as well as the batches; before, every run started from different weights.
 - **KV cache:** no speed-up for the small model (each step is about 6 ms of launch overhead
   whatever its length). 5.0× for a 136M-parameter model at batch 8 and 1,024 new tokens,
   where recomputing the prefix dominates.
