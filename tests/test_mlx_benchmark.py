@@ -18,6 +18,7 @@ def test_benchmark_writes_json_and_markdown(tmp_path: Path, config: Config) -> N
     cases = {(r["case"], r["framework"]) for r in report["results"]}
     assert cases == {
         ("forward", "pytorch"), ("forward", "mlx"), ("forward", "mlx compiled"),
+        ("forward", "mlx explicit kernels"),
         ("generate, cache", "pytorch"), ("generate, cache", "mlx"),
         ("generate, no cache", "pytorch"), ("generate, no cache", "mlx"),
     }  # fmt: skip
@@ -27,4 +28,4 @@ def test_benchmark_writes_json_and_markdown(tmp_path: Path, config: Config) -> N
     assert {"torch", "mlx", "mlx_backend", "cpu"} <= report["environment"].keys()
     table = (tmp_path / "b.md").read_text()
     assert "on cpu; MLX" in table  # no device name on CPU, no stray space
-    assert table.count("\n| ") == 8  # header + 7 rows
+    assert table.count("\n| ") == 9  # header + 8 rows

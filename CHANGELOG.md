@@ -18,8 +18,9 @@ All notable changes to this project are documented here. The format follows
   never leaves partial output.
 - `python -m decoder_mlx.train`: pretraining and fine-tuning (full or LoRA) in MLX, with
   checkpointing and exact resume (`--resume`).
-- `decoder-benchmark`: times PyTorch and MLX (forward pass, `mx.compile`, generation with
-  and without the cache) and writes JSON and a Markdown table.
+- `decoder-benchmark`: times PyTorch and MLX (forward pass, `mx.compile`, with and without
+  the `mx.fast` kernels, generation with and without the cache) and writes JSON and a
+  Markdown table.
 - `scripts/mlx_equivalence.py` and `scripts/compare_training.py`: the measurements behind
   the equivalence results in the README.
 - `decoder.config` (framework-free `Config`, re-exported by `decoder.model`),

@@ -222,13 +222,13 @@ and once with `--torch-device cpu`. Same weights, float32, the 9.5M-parameter mo
 median of 5 runs after 2 warm-up runs, with every interquartile range below 2% of the
 median. Xeon Gold 6132 (28 cores), Tesla V100, PyTorch 2.14.1, MLX 0.32.4 on CPU.
 
-| median time (batch 8) | PyTorch, V100 | PyTorch, CPU | MLX, CPU | MLX compiled, CPU |
-|---|---:|---:|---:|---:|
-| forward, 256 tokens | 8.0 ms | 149 ms | 22.7 s | 22.7 s |
-| generate 64 tokens, KV cache | 371 ms | 505 ms | 5.7 s | – |
-| generate 64 tokens, no cache | 387 ms | 1,048 ms | 172 s | – |
+| median time (batch 8) | PyTorch, V100 | PyTorch, CPU | MLX, CPU | MLX compiled, CPU | MLX without `mx.fast`, CPU |
+|---|---:|---:|---:|---:|---:|
+| forward, 256 tokens | 8.0 ms | 164 ms | 23.7 s | 23.6 s | 23.7 s |
+| generate 64 tokens, KV cache | 371 ms | 462 ms | 5.9 s | – | – |
+| generate 64 tokens, no cache | 387 ms | 1,142 ms | 178 s | – | – |
 
-(MLX CPU times are from the `--torch-device cpu` run; the other run measured them within 4%.)
+(MLX CPU times are from the `--torch-device cpu` run; the other run measured them within 1%.)
 
 These numbers say nothing about MLX on a Mac:
 
@@ -237,12 +237,13 @@ These numbers say nothing about MLX on a Mac:
   one, and matrix products dominate the time. The MLX times are proportional to the number
   of token positions computed: a forward pass computes 8 × 256 = 2,048, cached generation
   8 × 64 = 512 (a quarter of the time) and uncached generation 8 × (1 + … + 64) = 16,640
-  (7.6 times the time). For the same reason `mx.compile`, which fuses element-wise
-  operations, changes nothing here. On Apple silicon, MLX runs on the GPU through Metal.
+  (7.5 times the time). For the same reason `mx.compile`, which fuses element-wise
+  operations, changes nothing here, and neither do the `mx.fast` RoPE and attention
+  kernels (`use_fast_kernels=False` gives the same time). On Apple silicon, MLX runs on the GPU through Metal.
 - **GPU against CPU compares hardware, not frameworks.** The like-for-like comparison is
   the two CPU columns.
 - **What carries over is the effect of the KV cache.** It reduces MLX's generation time 30×
-  and PyTorch's 2× on CPU, where the cost follows the arithmetic. On the V100 it saves only
+  and PyTorch's 2.5× on CPU, where the cost follows the arithmetic. On the V100 it saves only
   4%: at batch 8 every decoding step is small, and both versions spend about 6 ms per token
   mostly on starting the work rather than on arithmetic.
 - **Generation is not compiled.** Each decoding step has a new key length, and a new

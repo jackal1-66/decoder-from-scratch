@@ -4,8 +4,9 @@
 
 Same configuration (``--config``, default ``Config()``) and random weights, float32:
 
-* forward: logits for a (batch, seq_len) batch, in PyTorch, in MLX, and in MLX through
-  ``mx.compile``;
+* forward: logits for a (batch, seq_len) batch, in PyTorch, in MLX, in MLX through
+  ``mx.compile``, and in MLX without the ``mx.fast`` RoPE and attention kernels
+  (``use_fast_kernels=False``);
 * generate: greedy decoding of ``new_tokens`` tokens from a one-token prompt, with and
   without the KV cache, in PyTorch and in MLX.
 
@@ -132,9 +133,14 @@ def run_benchmarks(
 ) -> list[Result]:
     torch.manual_seed(0)
     torch_model = TorchDecoder(config).eval()
+    weights = list(torch_to_mlx(torch_model.state_dict(), config).items())
     mlx_model = Decoder(config)
-    mlx_model.load_weights(list(torch_to_mlx(torch_model.state_dict(), config).items()))
+    mlx_model.load_weights(weights)
     mlx_model.eval()
+    # RoPE and attention written out with ordinary operations instead of mx.fast.
+    explicit_model = Decoder(config, use_fast_kernels=False)
+    explicit_model.load_weights(weights)
+    explicit_model.eval()
     torch_model.to(device)
     T = config.max_seq_len
     tokens = np.random.default_rng(0).integers(0, config.vocab_size, (batch, T))
@@ -157,6 +163,8 @@ def run_benchmarks(
                time_runs(lambda: mx.eval(mlx_model(mlx_tokens)), warmup, repeats)),
         Result("forward", "mlx compiled", mlx_dev, batch * T,
                time_runs(lambda: mx.eval(compiled(mlx_tokens)), warmup, repeats)),
+        Result("forward", "mlx explicit kernels", mlx_dev, batch * T,
+               time_runs(lambda: mx.eval(explicit_model(mlx_tokens)), warmup, repeats)),
     ]  # fmt: skip
 
     torch_prompt = torch.full((batch, 1), ord("\n"), dtype=torch.long, device=device)
